@@ -417,6 +417,23 @@ def format_berat(nilai) -> str:
         return "0 kg"
 
 
+# Kategori yang dihitung per satuan (pcs), bukan per kilogram.
+KATEGORI_PCS = {"boneka", "sprei"}
+
+
+def satuan_bawaan(nama_kategori: str) -> str:
+    """Satuan bawaan layanan berdasarkan kategorinya.
+
+    Boneka dan Sprei dicatat per satuan (pcs); selain itu per kilogram (kg).
+    """
+    return "pcs" if nama_kategori.strip().lower() in KATEGORI_PCS else "kg"
+
+
+def label_qty(satuan: str) -> str:
+    """Label kolom jumlah mengikuti satuan layanan."""
+    return "Jumlah (pcs)" if satuan == "pcs" else "Berat (kg)"
+
+
 def html_tim() -> str:
     """Membangun panel tim pengembang (glass dark) untuk halaman Beranda."""
     warna = [
@@ -607,7 +624,7 @@ def halaman_beranda() -> None:
     st.markdown("")
     s1, s2, s3 = st.columns(3)
     with s1:
-        st.metric("⚖️ Total Berat Dicuci", f"{r['total_berat']:g} kg", border=True)
+        st.metric("⚖️ Total Qty Dicuci", f"{r['total_berat']:g}", border=True)
     with s2:
         st.metric("📊 Rata-rata per Nota", rupiah(r["rata_rata_nota"]), border=True)
     with s3:
@@ -665,7 +682,7 @@ def halaman_beranda() -> None:
                 border=True,
             )
         with o3:
-            st.metric("⚖️ Total Berat", f"{omzet['total_berat']:g} kg", border=True)
+            st.metric("⚖️ Total Qty", f"{omzet['total_berat']:g}", border=True)
         with o4:
             st.metric("📊 Rata-rata / Nota", rupiah(omzet["rata_rata_nota"]), border=True)
 
@@ -699,7 +716,7 @@ def halaman_beranda() -> None:
             per_kategori = database.pendapatan_per_kategori()
             if per_kategori:
                 df = pd.DataFrame(per_kategori).rename(
-                    columns={"nama_kategori": "Kategori", "total": "Pendapatan (Rp)", "berat": "Berat (kg)"}
+                    columns={"nama_kategori": "Kategori", "total": "Pendapatan (Rp)", "berat": "Qty"}
                 )
                 df["Pendapatan (Rp)"] = df["Pendapatan (Rp)"].astype(float)
                 st.bar_chart(df.set_index("Kategori")["Pendapatan (Rp)"], height=265, color="#2563EB")
@@ -716,15 +733,15 @@ def halaman_beranda() -> None:
                         "nama_layanan": "Layanan",
                         "nama_kategori": "Kategori",
                         "total": "Pendapatan (Rp)",
-                        "berat": "Berat (kg)",
+                        "berat": "Qty",
                     }
                 )
                 st.dataframe(
-                    df[["Layanan", "Kategori", "Berat (kg)", "Pendapatan (Rp)"]],
+                    df[["Layanan", "Kategori", "Qty", "Pendapatan (Rp)"]],
                     hide_index=True,
                     width="stretch",
                     column_config={
-                        "Berat (kg)": st.column_config.NumberColumn(format="%.1f kg"),
+                        "Qty": st.column_config.NumberColumn(format="%.1f"),
                         "Pendapatan (Rp)": st.column_config.NumberColumn(format="Rp %.0f"),
                     },
                 )
@@ -967,18 +984,18 @@ def halaman_pelanggan() -> None:
                         "kode_nota": "Kode Nota",
                         "tanggal": "Tanggal",
                         "total": "Total",
-                        "total_berat": "Total Berat (kg)",
+                        "total_berat": "Total Qty",
                         "jumlah_item": "Jumlah Item",
                     }
                 )
                 df["Total"] = df["Total"].apply(rupiah)
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Jumlah Nota", len(riwayat), border=True)
-                m2.metric("Total Berat", f"{sum(r['total_berat'] for r in riwayat):g} kg", border=True)
+                m2.metric("Total Qty", f"{sum(r['total_berat'] for r in riwayat):g}", border=True)
                 m3.metric("Total Belanja", rupiah(sum(r["total"] for r in riwayat)), border=True)
                 st.markdown("")
                 st.dataframe(
-                    df[["Kode Nota", "Tanggal", "Jumlah Item", "Total Berat (kg)", "Total"]],
+                    df[["Kode Nota", "Tanggal", "Jumlah Item", "Total Qty", "Total"]],
                     hide_index=True,
                     width="stretch",
                 )
@@ -996,7 +1013,7 @@ def halaman_kategori_layanan() -> None:
           <div class="hero-emoji">🧺</div>
           <div>
             <div class="hero-title">Kategori & Layanan</div>
-            <div class="hero-desc">Master data jenis cucian beserta harga satuan per kilogram.</div>
+            <div class="hero-desc">Master data jenis cucian beserta harga satuan per kilogram (kg) atau per satuan (pcs).</div>
           </div>
         </div>
         """,
@@ -1134,21 +1151,26 @@ def halaman_kategori_layanan() -> None:
                     c1, c2, c3 = st.columns(3)
                     kode = c1.text_input("Kode Layanan *", placeholder="LYN13-PAK", key="tl_kode")
                     nama = c2.text_input("Nama Layanan *", placeholder="Cuci Sepatu Reguler", key="tl_nama")
-                    satuan = c3.selectbox(
-                        "Satuan *", ["kg", "pcs"], index=0, key="tl_satuan",
-                        help="Pilih kg (per kilogram) atau pcs (per satuan, mis. boneka/selimut/sprei).",
-                    )
+                    id_kat = c3.selectbox("Kategori *", list(peta_kat_tambah), format_func=lambda i: peta_kat_tambah[i], key="tl_kategori")
                     c4, c5 = st.columns([1, 2])
-                    id_kat = c4.selectbox("Kategori *", list(peta_kat_tambah), format_func=lambda i: peta_kat_tambah[i], key="tl_kategori")
+                    satuan_default = satuan_bawaan(peta_kat_tambah[id_kat])
+                    satuan = c4.selectbox(
+                        "Satuan *", ["kg", "pcs"],
+                        index=1 if satuan_default == "pcs" else 0,
+                        key="tl_satuan",
+                        help="Kategori Boneka & Sprei otomatis per satuan (pcs); lainnya per kilogram (kg).",
+                    )
                     tarif = c5.number_input("Harga Satuan (Rp) *", min_value=0, step=500, value=7000, key="tl_tarif")
                     st.markdown("")
                     simpan = st.form_submit_button("💾 Simpan Layanan", type="primary")
                 if simpan:
-                    if not kode.strip() or not nama.strip() or not satuan.strip():
-                        st.error("Kode, nama layanan, dan satuan wajib diisi.")
+                    if not kode.strip() or not nama.strip():
+                        st.error("Kode dan nama layanan wajib diisi.")
                     else:
+                        # Satuan selalu mengikuti kategori: Boneka & Sprei = pcs.
+                        satuan_final = satuan_bawaan(peta_kat_tambah[id_kat])
                         try:
-                            database.tambah_layanan(kode, nama, satuan, int(tarif), id_kat)
+                            database.tambah_layanan(kode, nama, satuan_final, int(tarif), id_kat)
                             flash(f"✅ Layanan **{nama.strip()}** berhasil disimpan.")
                             st.rerun()
                         except sqlite3.IntegrityError as e:
@@ -1161,33 +1183,36 @@ def halaman_kategori_layanan() -> None:
                 peta_lay_ubah = {d["id_layanan"]: f'{d["kode_layanan"]} · {d["nama_layanan"]} ({d["nama_kategori"]})' for d in data}
                 idx = st.selectbox("Pilih layanan", list(peta_lay_ubah), format_func=lambda i: peta_lay_ubah[i], key="ubah_lay_pilih")
                 lama = database.layanan_ber_id(idx)
+                peta_kat_ubah_lay = {d["id_kategori"]: d["nama_kategori"] for d in kategori_tersedia}
                 with st.form("form_ubah_layanan", border=False):
                     c1, c2, c3 = st.columns(3)
                     kode = c1.text_input("Kode Layanan *", value=lama["kode_layanan"], key=f"ul_kode_{idx}")
                     nama = c2.text_input("Nama Layanan *", value=lama["nama_layanan"], key=f"ul_nama_{idx}")
-                    satuan = c3.selectbox(
-                        "Satuan *", ["kg", "pcs"],
-                        index=1 if lama["satuan"] == "pcs" else 0,
-                        key=f"ul_satuan_{idx}",
-                        help="Pilih kg (per kilogram) atau pcs (per satuan, mis. boneka/selimut/sprei).",
-                    )
-                    c4, c5 = st.columns([1, 2])
-                    peta_kat_ubah_lay = {d["id_kategori"]: d["nama_kategori"] for d in kategori_tersedia}
-                    id_kat = c4.selectbox(
+                    id_kat = c3.selectbox(
                         "Kategori *", list(peta_kat_ubah_lay),
                         index=list(peta_kat_ubah_lay).index(lama["id_kategori"]) if lama["id_kategori"] in peta_kat_ubah_lay else 0,
                         format_func=lambda i: peta_kat_ubah_lay[i],
                         key=f"ul_kategori_{idx}",
                     )
+                    c4, c5 = st.columns([1, 2])
+                    satuan_default = satuan_bawaan(peta_kat_ubah_lay[id_kat])
+                    satuan = c4.selectbox(
+                        "Satuan *", ["kg", "pcs"],
+                        index=1 if satuan_default == "pcs" else 0,
+                        key=f"ul_satuan_{idx}",
+                        help="Kategori Boneka & Sprei otomatis per satuan (pcs); lainnya per kilogram (kg).",
+                    )
                     tarif = c5.number_input("Harga Satuan (Rp) *", min_value=0, step=500, value=int(lama["tarif_per_kg"]), key=f"ul_tarif_{idx}")
                     st.markdown("")
                     simpan = st.form_submit_button("💾 Simpan Perubahan", type="primary")
                 if simpan:
-                    if not kode.strip() or not nama.strip() or not satuan.strip():
-                        st.error("Kode, nama layanan, dan satuan wajib diisi.")
+                    if not kode.strip() or not nama.strip():
+                        st.error("Kode dan nama layanan wajib diisi.")
                     else:
+                        # Satuan selalu mengikuti kategori: Boneka & Sprei = pcs.
+                        satuan_final = satuan_bawaan(peta_kat_ubah_lay[id_kat])
                         try:
-                            database.ubah_layanan(idx, kode, nama, satuan, int(tarif), id_kat)
+                            database.ubah_layanan(idx, kode, nama, satuan_final, int(tarif), id_kat)
                             flash("✅ Layanan berhasil diperbarui.")
                             st.rerun()
                         except sqlite3.IntegrityError as e:
@@ -1238,6 +1263,8 @@ def tampilkan_nota(kode_nota: str) -> None:
     rincian = database.rincian_nota(kode_nota)
     total = sum(r["subtotal"] for r in rincian)
     total_berat = sum(r["berat"] for r in rincian)
+    satuan_nota = sorted({r["satuan"] for r in rincian})
+    qty_nota = f"{total_berat:g} {satuan_nota[0]}" if len(satuan_nota) == 1 else f"{total_berat:g}"
 
     baris = "".join(
         f"""
@@ -1265,7 +1292,7 @@ def tampilkan_nota(kode_nota: str) -> None:
             </div>
             <div style="text-align:right">
               <div class="nota-total">{rupiah(total)}</div>
-              <div class="nota-meta">{total_berat:g} kg · {len(rincian)} item</div>
+              <div class="nota-meta">{qty_nota} · {len(rincian)} item</div>
             </div>
           </div>
           <table style="width:100%;border-collapse:collapse;font-size:.87rem;color:#0F172A">
@@ -1273,8 +1300,8 @@ def tampilkan_nota(kode_nota: str) -> None:
               <tr style="text-align:left;color:#64748B;font-size:.76rem;text-transform:uppercase;letter-spacing:.04em">
                 <th style="padding:4px 10px 8px 0">Kategori</th>
                 <th style="padding:4px 10px 8px 0">Layanan</th>
-                <th style="padding:4px 10px 8px 0;text-align:right">Berat</th>
-                <th style="padding:4px 10px 8px 0;text-align:right">Harga/kg</th>
+                <th style="padding:4px 10px 8px 0;text-align:right">Qty</th>
+                <th style="padding:4px 10px 8px 0;text-align:right">Harga</th>
                 <th style="padding:4px 0 8px 0;text-align:right">Subtotal</th>
               </tr>
             </thead>
@@ -1298,7 +1325,7 @@ def halaman_kasir() -> None:
           <div class="hero-emoji">🛒</div>
           <div>
             <div class="hero-title">Kasir — Transaksi Baru</div>
-            <div class="hero-desc">Pilih pelanggan, pilih layanan, tentukan berat, lalu simpan nota.</div>
+            <div class="hero-desc">Pilih pelanggan, pilih layanan, tentukan jumlah/berat, lalu simpan nota.</div>
           </div>
         </div>
         """,
@@ -1370,25 +1397,34 @@ def halaman_kasir() -> None:
                     key=f"kasir_layanan_{id_kategori}",
                 )
             with b2:
-                berat = st.number_input(
-                    "Berat (kg) *", min_value=0.0, step=0.5, value=1.0, format="%.1f"
-                )
+                satuan_l = meta_layanan[id_layanan]["satuan"]
+                if satuan_l == "pcs":
+                    berat = st.number_input(
+                        "Jumlah (pcs) *", min_value=0.0, step=1.0, value=1.0,
+                        format="%.0f", key=f"kasir_qty_{id_kategori}",
+                    )
+                else:
+                    berat = st.number_input(
+                        "Berat (kg) *", min_value=0.0, step=0.5, value=1.0,
+                        format="%.1f", key=f"kasir_qty_{id_kategori}",
+                    )
             with b3:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                 tambah = st.button("➕ Tambah", type="primary", width="stretch")
 
             if tambah:
                 if berat <= 0:
-                    st.error("❌ Berat harus lebih dari 0 kg.")
+                    st.error(f"❌ {label_qty(satuan_l)} harus lebih dari 0.")
                 else:
                     info_layanan = meta_layanan[id_layanan]
-                    # Kombinasi kategori + layanan yang sama digabung beratnya.
+                    satuan = info_layanan["satuan"]
+                    # Kombinasi kategori + layanan yang sama digabung jumlahnya.
                     for item in st.session_state.keranjang:
                         if item["id_layanan"] == id_layanan:
                             item["berat"] += float(berat)
                             st.info(
-                                f"ℹ️ Berat layanan **{info_layanan['nama_layanan']}** digabung "
-                                f"menjadi {item['berat']:g} kg."
+                                f"ℹ️ Layanan **{info_layanan['nama_layanan']}** digabung "
+                                f"menjadi {item['berat']:g} {satuan}."
                             )
                             break
                     else:
@@ -1397,13 +1433,13 @@ def halaman_kasir() -> None:
                                 "id_layanan": id_layanan,
                                 "nama_layanan": info_layanan["nama_layanan"],
                                 "kategori": peta_kategori[id_kategori],
-                                "satuan": info_layanan["satuan"],
+                                "satuan": satuan,
                                 "tarif": info_layanan["tarif_per_kg"],
                                 "berat": float(berat),
                             }
                         )
                         st.success(
-                            f"✅ **{info_layanan['nama_layanan']}** ({berat:g} kg) "
+                            f"✅ **{info_layanan['nama_layanan']}** ({berat:g} {satuan}) "
                             "ditambahkan ke keranjang."
                         )
                     st.rerun()
@@ -1425,26 +1461,30 @@ def halaman_kasir() -> None:
                 columns={
                     "kategori": "Kategori",
                     "nama_layanan": "Layanan",
-                    "berat": "Berat (kg)",
+                    "berat": "Qty",
                     "satuan": "Satuan",
-                    "tarif": "Harga/kg",
+                    "tarif": "Harga Satuan",
                 }
             )
-            df["Berat (kg)"] = df["Berat (kg)"].astype(float)
-            df["Harga/kg"] = df["Harga/kg"].apply(rupiah)
+            df["Qty"] = df["Qty"].astype(float)
+            df["Harga Satuan"] = df["Harga Satuan"].apply(rupiah)
             df["Subtotal"] = [i["berat"] * i["tarif"] for i in keranjang]
             df["Subtotal"] = df["Subtotal"].apply(rupiah)
 
             st.dataframe(
-                df[["Kategori", "Layanan", "Berat (kg)", "Harga/kg", "Subtotal"]],
+                df[["Kategori", "Layanan", "Qty", "Satuan", "Harga Satuan", "Subtotal"]],
                 hide_index=True,
                 width="stretch",
-                column_config={"Berat (kg)": st.column_config.NumberColumn(format="%.1f")},
+                column_config={"Qty": st.column_config.NumberColumn(format="%.1f")},
             )
 
+            satuan_keranjang = sorted({i["satuan"] for i in keranjang})
             s1, s2, s3 = st.columns([1, 1, 2])
             with s1:
-                st.metric("Total Berat", f"{total_berat:g} kg", border=True)
+                if len(satuan_keranjang) == 1:
+                    st.metric("Total Qty", f"{total_berat:g} {satuan_keranjang[0]}", border=True)
+                else:
+                    st.metric("Total Qty", f"{total_berat:g}", border=True)
             with s2:
                 st.metric("Jumlah Item", len(keranjang), border=True)
             with s3:
@@ -1456,7 +1496,7 @@ def halaman_kasir() -> None:
                       <div>
                         <div style="font-size:.76rem;letter-spacing:.06em;text-transform:uppercase;opacity:.85">
                           Total Tagihan</div>
-                        <div style="font-size:1.05rem;font-weight:600">Berat × tarif saat nota dibuat</div>
+                        <div style="font-size:1.05rem;font-weight:600">Qty × tarif saat nota dibuat</div>
                       </div>
                       <div style="font-size:1.85rem;font-weight:800">{rupiah(total)}</div>
                     </div>
@@ -1531,13 +1571,13 @@ def halaman_kasir() -> None:
                     "nama_pelanggan": "Pelanggan",
                     "no_hp": "No. HP",
                     "total": "Total",
-                    "total_berat": "Total Berat (kg)",
+                    "total_berat": "Total Qty",
                     "jumlah_item": "Item",
                 }
             )
             df["Total"] = df["Total"].apply(rupiah)
             st.dataframe(
-                df[["ID", "Kode Nota", "Tanggal", "Pelanggan", "No. HP", "Item", "Total Berat (kg)", "Total"]],
+                df[["ID", "Kode Nota", "Tanggal", "Pelanggan", "No. HP", "Item", "Total Qty", "Total"]],
                 hide_index=True,
                 width="stretch",
             )
@@ -1573,7 +1613,7 @@ def _nota_teks(kode_nota: str) -> str:
         f"Pelanggan   : {info['nama_pelanggan']} ({info['no_hp']})",
         f"Alamat      : {info['alamat']}",
         garis,
-        f"{'Kategori':<12}{'Layanan':<22}{'Berat':>8}{'Subtotal':>14}",
+        f"{'Kategori':<12}{'Layanan':<22}{'Qty':>8}{'Subtotal':>14}",
         "-" * 58,
     ]
     for r in rincian:

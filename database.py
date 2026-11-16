@@ -166,15 +166,15 @@ def isi_data_awal(conn: sqlite3.Connection) -> None:
         ("LYN04-KAR", "Cuci Karpet Reguler", "kg", 9000, "Karpet"),
         ("LYN05-KAR", "Cuci Karpet Express", "kg", 13000, "Karpet"),
         ("LYN06-KAR", "Cuci Karpet Kering", "kg", 6000, "Karpet"),
-        ("LYN07-BON", "Cuci Boneka Reguler", "kg", 12000, "Boneka"),
-        ("LYN08-BON", "Cuci Boneka Express", "kg", 16000, "Boneka"),
-        ("LYN09-BON", "Cuci Boneka Kering", "kg", 9000, "Boneka"),
+        ("LYN07-BON", "Cuci Boneka Reguler", "pcs", 12000, "Boneka"),
+        ("LYN08-BON", "Cuci Boneka Express", "pcs", 16000, "Boneka"),
+        ("LYN09-BON", "Cuci Boneka Kering", "pcs", 9000, "Boneka"),
         ("LYN10-SEL", "Cuci Selimut Reguler", "kg", 8000, "Selimut"),
         ("LYN11-SEL", "Cuci Selimut Express", "kg", 11000, "Selimut"),
         ("LYN12-SEL", "Cuci Selimut Kering", "kg", 7000, "Selimut"),
-        ("LYN13-SPR", "Cuci Sprei Reguler", "kg", 8000, "Sprei"),
-        ("LYN14-SPR", "Cuci Sprei Express", "kg", 11000, "Sprei"),
-        ("LYN15-SPR", "Cuci Sprei Kering", "kg", 6000, "Sprei"),
+        ("LYN13-SPR", "Cuci Sprei Reguler", "pcs", 8000, "Sprei"),
+        ("LYN14-SPR", "Cuci Sprei Express", "pcs", 11000, "Sprei"),
+        ("LYN15-SPR", "Cuci Sprei Kering", "pcs", 6000, "Sprei"),
     ]
     id_layanan: dict[str, int] = {}
     for kode, nama, satuan, tarif, induk in layanan:
