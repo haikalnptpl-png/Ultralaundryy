@@ -393,6 +393,32 @@ html, body, [class*="css"] { font-family: 'Plus Jakarta Sans', 'Segoe UI', sans-
     .team-title { font-size: 1.4rem; }
     .team-dosen { flex-wrap: wrap; }
 }
+
+/* ---------- Halaman login ---------- */
+.login-head {
+    display: flex; align-items: center; gap: .9rem;
+    background: linear-gradient(120deg, #0B1B36 0%, #10254A 55%, #0E2A4D 100%);
+    border-radius: 20px; padding: 1.3rem 1.4rem;
+    box-shadow: 0 16px 38px rgba(15,23,42,.30);
+    margin-bottom: 1.1rem;
+}
+.login-logo {
+    width: 54px; height: 54px; flex: 0 0 54px; border-radius: 16px;
+    overflow: hidden; background: #fff; padding: 4px;
+    box-shadow: 0 8px 20px rgba(37,99,235,.45);
+}
+.login-title { font-weight: 800; font-size: 1.25rem; color: #fff; letter-spacing: .02em; }
+.login-sub { font-size: .78rem; color: #93C5FD; letter-spacing: .1em; text-transform: uppercase; margin-top: .15rem; }
+
+/* ---------- Kartu user di sidebar ---------- */
+.sb-user { display: flex; align-items: center; gap: .65rem; margin-bottom: .7rem; }
+.sb-user-ava {
+    width: 40px; height: 40px; flex: 0 0 40px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center; font-size: 1.1rem;
+    background: rgba(56,189,248,.16); border: 1px solid rgba(125,211,252,.25);
+}
+.sb-user-nama { font-weight: 700; font-size: .9rem; color: #fff; line-height: 1.2; }
+.sb-user-user { font-size: .74rem; color: #93C5FD; }
 </style>
 """
 
@@ -526,6 +552,41 @@ def tampilkan_flash() -> None:
         st.success(pesan)
 
 
+# ----------------------------------------------------------------------- auth
+
+def halaman_login() -> None:
+    _, tengah, _ = st.columns([1, 1.15, 1])
+    with tengah:
+        st.markdown(
+            f"""
+            <div class="login-head">
+              <div class="login-logo">{LOGO_IMG_HTML}</div>
+              <div>
+                <div class="login-title">ULTRA LAUNDRY</div>
+                <div class="login-sub">Sistem Administrasi Transaksi</div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.form("form_login", border=True):
+            st.markdown("#### 🔐 Masuk ke aplikasi")
+            username = st.text_input("Username", placeholder="admin", key="login_username")
+            password = st.text_input(
+                "Password", type="password", placeholder="••••••••", key="login_password"
+            )
+            masuk = st.form_submit_button("Masuk", type="primary", width="stretch")
+        if masuk:
+            user = database.cek_login(username, password)
+            if user is None:
+                st.error("❌ Username atau password salah.")
+            else:
+                st.session_state.user = user
+                st.session_state.keranjang = []
+                st.rerun()
+        st.caption("Akun bawaan: **admin / admin123** — segera ganti password setelah masuk pertama kali.")
+
+
 # -------------------------------------------------------------------- sidebar
 
 def bangun_sidebar() -> str:
@@ -554,6 +615,39 @@ def bangun_sidebar() -> str:
             ],
             label_visibility="collapsed",
         )
+        st.markdown("---")
+        u = st.session_state.get("user", {})
+        st.markdown(
+            f"""
+            <div class="sb-user">
+              <div class="sb-user-ava">👤</div>
+              <div>
+                <div class="sb-user-nama">{u.get('nama_lengkap', '')}</div>
+                <div class="sb-user-user">@{u.get('username', '')}</div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.expander("🔑 Ubah password"):
+            with st.form("form_ubah_pw", border=False):
+                pw_lama = st.text_input("Password lama", type="password", key="pw_lama")
+                pw_baru = st.text_input("Password baru", type="password", key="pw_baru")
+                pw_ulang = st.text_input("Ulangi password baru", type="password", key="pw_ulang")
+                simpan_pw = st.form_submit_button("Simpan password baru", type="primary", width="stretch")
+            if simpan_pw:
+                if len(pw_baru) < 6:
+                    st.error("Password baru minimal 6 karakter.")
+                elif pw_baru != pw_ulang:
+                    st.error("Konfirmasi password baru tidak sama.")
+                elif database.ubah_password(u["id_user"], pw_lama, pw_baru):
+                    st.success("✅ Password berhasil diganti.")
+                else:
+                    st.error("❌ Password lama salah.")
+        if st.button("🚪 Keluar", width="stretch"):
+            st.session_state.pop("user", None)
+            st.session_state.pop("keranjang", None)
+            st.rerun()
         st.markdown("---")
         st.markdown(
             """
@@ -1634,6 +1728,9 @@ def _nota_teks(kode_nota: str) -> str:
 
 def main() -> None:
     database.inisialisasi()
+    if "user" not in st.session_state:
+        halaman_login()
+        return
     menu = bangun_sidebar()
 
     if menu.startswith("🏠"):

@@ -22,7 +22,11 @@ Foreign key SQLite diaktifkan pada setiap koneksi supaya aturan referensi
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import math
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -120,6 +124,19 @@ CREATE TABLE IF NOT EXISTS detail_transaksi (
     PRIMARY KEY (id_transaksi, id_layanan)
 );
 
+CREATE TABLE IF NOT EXISTS user (
+    id_user        INTEGER PRIMARY KEY AUTOINCREMENT,
+    username       TEXT NOT NULL UNIQUE COLLATE NOCASE
+                   CHECK (length(trim(username)) > 0),
+    nama_lengkap   TEXT NOT NULL
+                   CHECK (length(trim(nama_lengkap)) > 0),
+    password_hash  TEXT NOT NULL,
+    aktif          INTEGER NOT NULL DEFAULT 1
+                   CHECK (aktif IN (0, 1)),
+    dibuat_pada    TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    terakhir_login TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_transaksi_tanggal ON transaksi(tanggal);
 CREATE INDEX IF NOT EXISTS idx_transaksi_pelanggan ON transaksi(id_pelanggan);
 CREATE INDEX IF NOT EXISTS idx_layanan_kategori ON layanan(id_kategori);
@@ -134,6 +151,83 @@ def inisialisasi() -> None:
         kosong = conn.execute("SELECT COUNT(*) FROM kategori").fetchone()[0] == 0
         if kosong:
             isi_data_awal(conn)
+        pastikan_user_awal(conn)
+
+
+# ----------------------------------------------------------------------- auth
+
+_ITERASI_PBKDF2 = 600_000
+
+
+def buat_hash(password: str) -> str:
+    """Membuat hash PBKDF2-HMAC-SHA256 dengan salt acak per user.
+
+    Format tersimpan: ``pbkdf2_sha256$<iterasi>$<salt_b64>$<hash_b64>``.
+    """
+    salt = secrets.token_bytes(16)
+    hasil = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _ITERASI_PBKDF2)
+    return (f"pbkdf2_sha256${_ITERASI_PBKDF2}"
+            f"${base64.b64encode(salt).decode()}"
+            f"${base64.b64encode(hasil).decode()}")
+
+
+def verifikasi_password(password: str, hash_tersimpan: str) -> bool:
+    """Mencocokkan password dengan hash tersimpan secara constant-time."""
+    try:
+        algoritma, iterasi, salt_b64, hash_b64 = hash_tersimpan.split("$")
+        if algoritma != "pbkdf2_sha256":
+            return False
+        salt = base64.b64decode(salt_b64)
+        harapan = base64.b64decode(hash_b64)
+        hasil = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iterasi))
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(hasil, harapan)
+
+
+def pastikan_user_awal(conn: sqlite3.Connection) -> None:
+    """Membuat akun admin bawaan (admin/admin123) bila tabel user masih kosong."""
+    if conn.execute("SELECT COUNT(*) FROM user").fetchone()[0] == 0:
+        conn.execute(
+            "INSERT INTO user (username, nama_lengkap, password_hash) VALUES (?, ?, ?)",
+            ("admin", "Administrator", buat_hash("admin123")),
+        )
+
+
+def cek_login(username: str, password: str) -> dict | None:
+    """Memvalidasi kredensial; mengembalikan data user saat berhasil."""
+    with koneksi() as conn:
+        row = conn.execute(
+            "SELECT id_user, username, nama_lengkap, password_hash FROM user "
+            "WHERE username = ? AND aktif = 1",
+            (username.strip(),),
+        ).fetchone()
+        if row is None or not verifikasi_password(password, row["password_hash"]):
+            return None
+        conn.execute(
+            "UPDATE user SET terakhir_login = datetime('now', 'localtime') WHERE id_user = ?",
+            (row["id_user"],),
+        )
+        return {
+            "id_user": row["id_user"],
+            "username": row["username"],
+            "nama_lengkap": row["nama_lengkap"],
+        }
+
+
+def ubah_password(id_user: int, password_lama: str, password_baru: str) -> bool:
+    """Mengganti password setelah password lama terverifikasi."""
+    with koneksi() as conn:
+        row = conn.execute(
+            "SELECT password_hash FROM user WHERE id_user = ?", (id_user,)
+        ).fetchone()
+        if row is None or not verifikasi_password(password_lama, row["password_hash"]):
+            return False
+        conn.execute(
+            "UPDATE user SET password_hash = ? WHERE id_user = ?",
+            (buat_hash(password_baru), id_user),
+        )
+        return True
 
 
 # --------------------------------------------------------------- data awal
