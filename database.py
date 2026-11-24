@@ -29,7 +29,7 @@ import math
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 # ------------------------------------------------------------------ konfigurasi
@@ -110,7 +110,9 @@ CREATE TABLE IF NOT EXISTS transaksi (
     tanggal      TEXT NOT NULL
                  CHECK (date(tanggal) IS NOT NULL AND date(tanggal) = tanggal),
     id_pelanggan INTEGER NOT NULL
-                 REFERENCES pelanggan(id_pelanggan) ON DELETE RESTRICT
+                 REFERENCES pelanggan(id_pelanggan) ON DELETE RESTRICT,
+    id_user      INTEGER NOT NULL
+                 REFERENCES user(id_user) ON DELETE RESTRICT
 );
 
 CREATE TABLE IF NOT EXISTS detail_transaksi (
@@ -131,6 +133,8 @@ CREATE TABLE IF NOT EXISTS user (
     nama_lengkap   TEXT NOT NULL
                    CHECK (length(trim(nama_lengkap)) > 0),
     password_hash  TEXT NOT NULL,
+    role           TEXT NOT NULL DEFAULT 'kasir'
+                   CHECK (role IN ('owner', 'kasir')),
     aktif          INTEGER NOT NULL DEFAULT 1
                    CHECK (aktif IN (0, 1)),
     dibuat_pada    TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -144,14 +148,42 @@ CREATE INDEX IF NOT EXISTS idx_detail_layanan ON detail_transaksi(id_layanan);
 """
 
 
+def _migrasi_multiuser(conn: sqlite3.Connection) -> None:
+    kolom_user = {r["name"] for r in conn.execute("PRAGMA table_info(user)")}
+    if "role" not in kolom_user:
+        conn.execute(
+            "ALTER TABLE user ADD COLUMN role TEXT NOT NULL DEFAULT 'kasir' "
+            "CHECK (role IN ('owner', 'kasir'))"
+        )
+    conn.execute("UPDATE user SET role = 'owner' WHERE lower(username) IN ('admin', 'owner')")
+
+    kolom_transaksi = {r["name"] for r in conn.execute("PRAGMA table_info(transaksi)")}
+    if "id_user" not in kolom_transaksi:
+        conn.execute(
+            "ALTER TABLE transaksi ADD COLUMN id_user INTEGER "
+            "REFERENCES user(id_user) ON DELETE RESTRICT"
+        )
+
+
 def inisialisasi() -> None:
-    """Membuat skema bila belum ada dan mengisi data awal bila tabel masih kosong."""
+    """Membuat/migrasi skema dan memastikan akun demo tersedia."""
     with koneksi() as conn:
         conn.executescript(SKEMA)
+        _migrasi_multiuser(conn)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transaksi_user ON transaksi(id_user)")
+        pastikan_user_awal(conn)
+
+        owner = conn.execute(
+            "SELECT id_user FROM user WHERE role = 'owner' ORDER BY id_user LIMIT 1"
+        ).fetchone()
+        if owner:
+            conn.execute(
+                "UPDATE transaksi SET id_user = ? WHERE id_user IS NULL", (owner["id_user"],)
+            )
+
         kosong = conn.execute("SELECT COUNT(*) FROM kategori").fetchone()[0] == 0
         if kosong:
             isi_data_awal(conn)
-        pastikan_user_awal(conn)
 
 
 # ----------------------------------------------------------------------- auth
@@ -186,20 +218,54 @@ def verifikasi_password(password: str, hash_tersimpan: str) -> bool:
 
 
 def pastikan_user_awal(conn: sqlite3.Connection) -> None:
-    """Membuat akun admin bawaan (admin/admin123) bila tabel user masih kosong."""
-    if conn.execute("SELECT COUNT(*) FROM user").fetchone()[0] == 0:
-        conn.execute(
-            "INSERT INTO user (username, nama_lengkap, password_hash) VALUES (?, ?, ?)",
-            ("admin", "Administrator", buat_hash("admin123")),
+    """Membuat akun owner dan empat kasir demo bila belum tersedia."""
+    akun = [
+        ("admin", "Administrator", "admin123", "owner"),
+        ("deyra", "Deyra Taftiar M. B", "Deyraksr1", "kasir"),
+        ("haikal", "Haikal Ronaldo Napitupulu", "Haikalksr2", "kasir"),
+        ("latifa", "Latifa Nafiah Putri", "Latifaksr3", "kasir"),
+        ("reva", "Revalia Apria Sisviyanti", "Revaksr4", "kasir"),
+    ]
+    for username, nama, password, role in akun:
+        row = conn.execute("SELECT id_user FROM user WHERE username = ?", (username,)).fetchone()
+        if row is None:
+            conn.execute(
+                """INSERT INTO user (username, nama_lengkap, password_hash, role)
+                   VALUES (?, ?, ?, ?)""",
+                (username, nama, buat_hash(password), role),
+            )
+
+
+def tambah_akun(username: str, nama_lengkap: str, password: str,
+                role: str = "kasir") -> int:
+    """Membuat akun baru; registrasi publik hanya boleh membuat akun kasir."""
+    username = username.strip().lower()
+    nama_lengkap = nama_lengkap.strip()
+    if not username or not nama_lengkap:
+        raise ValueError("Username dan nama lengkap wajib diisi.")
+    if (
+        not (3 <= len(username) <= 30)
+        or not username.isascii()
+        or not all(c.isalnum() or c == "_" for c in username)
+    ):
+        raise ValueError("Username 3–30 karakter, hanya huruf, angka, atau garis bawah.")
+    if role not in ("owner", "kasir"):
+        raise ValueError("Peran akun tidak valid.")
+    with koneksi() as conn:
+        cur = conn.execute(
+            """INSERT INTO user (username, nama_lengkap, password_hash, role)
+               VALUES (?, ?, ?, ?)""",
+            (username, nama_lengkap, buat_hash(password), role),
         )
+        return cur.lastrowid
 
 
 def cek_login(username: str, password: str) -> dict | None:
-    """Memvalidasi kredensial; mengembalikan data user saat berhasil."""
+    """Memvalidasi kredensial; mengembalikan data user beserta perannya."""
     with koneksi() as conn:
         row = conn.execute(
-            "SELECT id_user, username, nama_lengkap, password_hash FROM user "
-            "WHERE username = ? AND aktif = 1",
+            """SELECT id_user, username, nama_lengkap, role, password_hash
+                 FROM user WHERE username = ? AND aktif = 1""",
             (username.strip(),),
         ).fetchone()
         if row is None or not verifikasi_password(password, row["password_hash"]):
@@ -212,6 +278,7 @@ def cek_login(username: str, password: str) -> dict | None:
             "id_user": row["id_user"],
             "username": row["username"],
             "nama_lengkap": row["nama_lengkap"],
+            "role": row["role"],
         }
 
 
@@ -238,6 +305,11 @@ def isi_data_awal(conn: sqlite3.Connection) -> None:
     Total pendapatan data contoh = Rp117.000 dari 4 transaksi, sesuai
     hasil rekap yang dipakai pada dokumentasi proyek.
     """
+    owner = conn.execute(
+        "SELECT id_user FROM user WHERE role = 'owner' ORDER BY id_user LIMIT 1"
+    ).fetchone()
+    id_owner = owner["id_user"] if owner else None
+
     kategori = [
         ("Pakaian", "Cucian baju, kemeja, celana, dan pakaian harian"),
         ("Karpet", "Cucian karpet lantai dan permadani ruangan"),
@@ -305,8 +377,9 @@ def isi_data_awal(conn: sqlite3.Connection) -> None:
     tarif_layanan = {l[0]: l[3] for l in layanan}
     for kode, tgl, idx_pel, item in transaksi:
         cur = conn.execute(
-            "INSERT INTO transaksi (kode_nota, tanggal, id_pelanggan) VALUES (?, ?, ?)",
-            (kode, tgl, id_pelanggan[idx_pel]),
+            """INSERT INTO transaksi (kode_nota, tanggal, id_pelanggan, id_user)
+               VALUES (?, ?, ?, ?)""",
+            (kode, tgl, id_pelanggan[idx_pel], id_owner),
         )
         id_trx = cur.lastrowid
         for kode_lay, berat in item:
@@ -518,25 +591,29 @@ def hapus_pelanggan(id_pelanggan: int) -> bool:
 
 # ------------------------------------------------------------------ transaksi
 
-def kode_nota_berikutnya() -> str:
-    """Menghasilkan kode nota berikutnya, mis. NOTA-005."""
+def kode_nota_berikutnya(id_user: int) -> str:
+    """Menghasilkan nomor urut nota per user, mis. NOTA-DEYRA-001."""
     with koneksi() as conn:
-        row = conn.execute(
-            """SELECT kode_nota FROM transaksi
-                WHERE kode_nota LIKE 'NOTA-%'
-                ORDER BY CAST(SUBSTR(kode_nota, 6) AS INTEGER) DESC LIMIT 1"""
-        ).fetchone()
-        if not row:
-            return "NOTA-001"
-        angka = row["kode_nota"].split("-")[-1]
-        try:
-            return f"NOTA-{int(angka) + 1:03d}"
-        except ValueError:
-            return f"NOTA-{datetime.now().strftime('%d%m%Y-%H%M%S')}"
+        row = conn.execute("SELECT username FROM user WHERE id_user = ?", (id_user,)).fetchone()
+        if row is None:
+            raise ValueError("Akun pembuat nota tidak ditemukan.")
+        prefix = row["username"].upper()
+        pola = f"NOTA-{prefix}-%"
+        kodes = conn.execute(
+            "SELECT kode_nota FROM transaksi WHERE id_user = ? AND kode_nota LIKE ?",
+            (id_user, pola),
+        ).fetchall()
+        nomor = 0
+        for kode in kodes:
+            try:
+                nomor = max(nomor, int(kode["kode_nota"].rsplit("-", 1)[-1]))
+            except (ValueError, IndexError):
+                continue
+        return f"NOTA-{prefix}-{nomor + 1:03d}"
 
 
 def simpan_transaksi(kode_nota: str, tanggal: str, id_pelanggan: int,
-                     items: list[dict]) -> int:
+                     id_user: int, items: list[dict]) -> int:
     """Menyimpan satu nota beserta seluruh baris detailnya sebagai satu kesatuan.
 
     ``items`` berisi dict ``{"id_layanan": int, "berat": float}``.
@@ -547,21 +624,20 @@ def simpan_transaksi(kode_nota: str, tanggal: str, id_pelanggan: int,
     if not items:
         raise ValueError("Nota harus memiliki minimal satu baris cucian.")
 
-    # Gabungkan baris dengan layanan sama.
     gabung: dict[int, float] = {}
     for item in items:
         gabung[item["id_layanan"]] = gabung.get(item["id_layanan"], 0.0) + float(item["berat"])
 
     with koneksi() as conn:
         cur = conn.execute(
-            """INSERT INTO transaksi (kode_nota, tanggal, id_pelanggan)
-               VALUES (?, ?, ?)""",
-            (kode_nota.strip().upper(), tanggal, id_pelanggan),
+            """INSERT INTO transaksi (kode_nota, tanggal, id_pelanggan, id_user)
+               VALUES (?, ?, ?, ?)""",
+            (kode_nota.strip().upper(), tanggal, id_pelanggan, id_user),
         )
         id_transaksi = cur.lastrowid
         for id_layanan, berat in gabung.items():
             if berat <= 0:
-                raise ValueError("Berat harus lebih dari 0 kg.")
+                raise ValueError("Jumlah cucian harus lebih dari 0.")
             tarif = conn.execute(
                 "SELECT tarif_per_kg FROM layanan WHERE id_layanan = ?", (id_layanan,)
             ).fetchone()
@@ -576,35 +652,49 @@ def simpan_transaksi(kode_nota: str, tanggal: str, id_pelanggan: int,
         return id_transaksi
 
 
-def daftar_nota(cari: str = "") -> list[dict]:
-    """Daftar seluruh nota beserta total yang dihitung dinamis."""
+def daftar_nota(cari: str = "", id_user: int | None = None,
+               id_pembuat: int | None = None) -> list[dict]:
+    """Daftar nota; kasir dibatasi miliknya, owner dapat memfilter pembuat."""
+    kondisi: list[str] = []
+    params: list = []
+    if id_user is not None:
+        kondisi.append("t.id_user = ?")
+        params.append(id_user)
+    if id_pembuat is not None:
+        kondisi.append("t.id_user = ?")
+        params.append(id_pembuat)
+    if cari.strip():
+        pola = f"%{cari.strip()}%"
+        kondisi.append("(t.kode_nota LIKE ? OR p.nama_pelanggan LIKE ? OR u.nama_lengkap LIKE ?)")
+        params.extend([pola, pola, pola])
+
     with koneksi() as conn:
-        dasar = """SELECT t.id_transaksi, t.kode_nota, t.tanggal,
+        dasar = """SELECT t.id_transaksi, t.kode_nota, t.tanggal, t.id_user,
                           p.nama_pelanggan, p.no_hp,
+                          u.username AS username_kasir, u.nama_lengkap AS nama_kasir,
                           COALESCE(SUM(d.berat * d.harga_satuan), 0) AS total,
                           COALESCE(SUM(d.berat), 0) AS total_berat,
                           COUNT(d.id_layanan) AS jumlah_item
                      FROM transaksi t
                      JOIN pelanggan p ON p.id_pelanggan = t.id_pelanggan
+                     LEFT JOIN user u ON u.id_user = t.id_user
                      LEFT JOIN detail_transaksi d ON d.id_transaksi = t.id_transaksi"""
-        if cari.strip():
-            pola = f"%{cari.strip()}%"
-            sql = dasar + """ WHERE t.kode_nota LIKE ? OR p.nama_pelanggan LIKE ?
-                             GROUP BY t.id_transaksi
-                             ORDER BY t.tanggal DESC, t.id_transaksi DESC"""
-            return _baris(conn.execute(sql, (pola, pola)))
-        sql = dasar + """ GROUP BY t.id_transaksi
-                         ORDER BY t.tanggal DESC, t.id_transaksi DESC"""
-        return _baris(conn.execute(sql))
+        where = " WHERE " + " AND ".join(kondisi) if kondisi else ""
+        sql = dasar + where + """ GROUP BY t.id_transaksi
+                                   ORDER BY t.tanggal DESC, t.id_transaksi DESC"""
+        return _baris(conn.execute(sql, params))
 
 
 def info_nota(kode_nota: str) -> dict | None:
-    """Header nota: kode, tanggal, dan data pelanggan."""
+    """Header nota: kode, tanggal, data pelanggan, dan kasir pembuat."""
     with koneksi() as conn:
         row = conn.execute(
-            """SELECT t.id_transaksi, t.kode_nota, t.tanggal,
-                      p.nama_pelanggan, p.no_hp, p.alamat
-                 FROM transaksi t JOIN pelanggan p ON p.id_pelanggan = t.id_pelanggan
+            """SELECT t.id_transaksi, t.kode_nota, t.tanggal, t.id_user,
+                      p.nama_pelanggan, p.no_hp, p.alamat,
+                      u.username AS username_kasir, u.nama_lengkap AS nama_kasir
+                 FROM transaksi t
+                 JOIN pelanggan p ON p.id_pelanggan = t.id_pelanggan
+                 LEFT JOIN user u ON u.id_user = t.id_user
                 WHERE t.kode_nota = ?""",
             (kode_nota.strip().upper(),),
         ).fetchone()
@@ -628,20 +718,23 @@ def rincian_nota(kode_nota: str) -> list[dict]:
         ))
 
 
-def riwayat_pelanggan(id_pelanggan: int) -> list[dict]:
-    """Riwayat seluruh nota milik satu pelanggan."""
+def riwayat_pelanggan(id_pelanggan: int, id_user: int | None = None) -> list[dict]:
+    """Riwayat nota pelanggan; kasir hanya melihat nota miliknya."""
+    kondisi = "AND t.id_user = ?" if id_user is not None else ""
+    params = (id_pelanggan, id_user) if id_user is not None else (id_pelanggan,)
     with koneksi() as conn:
         return _baris(conn.execute(
-            """SELECT t.kode_nota, t.tanggal,
+            f"""SELECT t.kode_nota, t.tanggal, u.nama_lengkap AS nama_kasir,
                       COALESCE(SUM(d.berat * d.harga_satuan), 0) AS total,
                       COALESCE(SUM(d.berat), 0) AS total_berat,
                       COUNT(d.id_layanan) AS jumlah_item
                  FROM transaksi t
+                 LEFT JOIN user u ON u.id_user = t.id_user
                  LEFT JOIN detail_transaksi d ON d.id_transaksi = t.id_transaksi
-                WHERE t.id_pelanggan = ?
+                WHERE t.id_pelanggan = ? {kondisi}
                 GROUP BY t.id_transaksi
                 ORDER BY t.tanggal DESC, t.id_transaksi DESC""",
-            (id_pelanggan,),
+            params,
         ))
 
 

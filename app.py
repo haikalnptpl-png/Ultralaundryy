@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import sqlite3
 from datetime import date, timedelta
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -569,22 +570,86 @@ def halaman_login() -> None:
             """,
             unsafe_allow_html=True,
         )
-        with st.form("form_login", border=True):
-            st.markdown("#### 🔐 Masuk ke aplikasi")
-            username = st.text_input("Username", placeholder="admin", key="login_username")
-            password = st.text_input(
-                "Password", type="password", placeholder="••••••••", key="login_password"
-            )
-            masuk = st.form_submit_button("Masuk", type="primary", width="stretch")
-        if masuk:
-            user = database.cek_login(username, password)
-            if user is None:
-                st.error("❌ Username atau password salah.")
-            else:
-                st.session_state.user = user
-                st.session_state.keranjang = []
-                st.rerun()
-        st.caption("Akun bawaan: **admin / admin123** — segera ganti password setelah masuk pertama kali.")
+        tab_masuk, tab_daftar = st.tabs(["🔑 Masuk", "📝 Daftar Akun"])
+
+        with tab_masuk:
+            with st.form("form_login", border=True):
+                st.markdown("#### Masuk ke aplikasi")
+                username = st.text_input(
+                    "Username", placeholder="admin / deyra / haikal / ...", key="login_username"
+                )
+                password = st.text_input(
+                    "Password", type="password", placeholder="••••••••", key="login_password"
+                )
+                masuk = st.form_submit_button("Masuk", type="primary", width="stretch")
+            if masuk:
+                user = database.cek_login(username, password)
+                if user is None:
+                    st.error("❌ Username atau password salah.")
+                else:
+                    st.session_state.user = user
+                    st.session_state.keranjang = []
+                    st.session_state.pop("menu_utama", None)
+                    st.rerun()
+
+        with tab_daftar:
+            with st.form("form_register", border=True):
+                st.markdown("#### Daftar akun kasir baru")
+                st.caption("Akun yang didaftarkan otomatis memiliki akses **Data Pelanggan** dan **Kasir**.")
+                nama = st.text_input("Nama lengkap *", placeholder="Nama karyawan", key="reg_nama")
+                username_baru = st.text_input(
+                    "Username *", placeholder="Huruf, angka, atau garis bawah",
+                    key="reg_username",
+                )
+                password_baru = st.text_input(
+                    "Password *", type="password", placeholder="Minimal 6 karakter",
+                    key="reg_password",
+                )
+                konfirmasi = st.text_input(
+                    "Ulangi password *", type="password", key="reg_konfirmasi"
+                )
+                daftar = st.form_submit_button("Buat Akun Kasir", type="primary", width="stretch")
+            if daftar:
+                bersih_username = username_baru.strip()
+                if not nama.strip() or not bersih_username:
+                    st.error("❌ Nama lengkap dan username wajib diisi.")
+                elif not (3 <= len(bersih_username) <= 30) or not bersih_username.isascii() or not all(
+                    c.isalnum() or c == "_" for c in bersih_username
+                ):
+                    st.error("❌ Username 3–30 karakter, hanya huruf, angka, atau garis bawah.")
+                elif len(password_baru) < 6:
+                    st.error("❌ Password minimal 6 karakter.")
+                elif password_baru != konfirmasi:
+                    st.error("❌ Konfirmasi password tidak sama.")
+                else:
+                    try:
+                        database.tambah_akun(
+                            bersih_username, nama, password_baru, role="kasir"
+                        )
+                        user = database.cek_login(bersih_username, password_baru)
+                        st.session_state.user = user
+                        st.session_state.keranjang = []
+                        st.session_state.pop("menu_utama", None)
+                        flash(f"✅ Akun **{bersih_username}** berhasil dibuat. Selamat datang!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("❌ Username sudah dipakai. Pilih username lain.")
+                    except ValueError as e:
+                        st.error(f"❌ Gagal mendaftar: {e}")
+
+        st.markdown("### 🧪 Akun Demo")
+        demo = pd.DataFrame(
+            [
+                ("Owner", "admin", "admin123"),
+                ("Kasir", "deyra", "Deyraksr1"),
+                ("Kasir", "haikal", "Haikalksr2"),
+                ("Kasir", "latifa", "Latifaksr3"),
+                ("Kasir", "reva", "Revaksr4"),
+            ],
+            columns=["Peran", "Username", "Password"],
+        )
+        st.dataframe(demo, hide_index=True, width="stretch")
+        st.caption("Khusus demo/tugas — segera ganti password sebelum aplikasi dipakai sungguhan.")
 
 
 # -------------------------------------------------------------------- sidebar
@@ -605,25 +670,24 @@ def bangun_sidebar() -> str:
         )
         st.markdown("---")
         st.markdown("**🧭 NAVIGASI**")
+        u = st.session_state.get("user", {})
+        menu_owner = ["🏠  Beranda", "👥  Data Pelanggan", "🧺  Kategori & Layanan", "🛒  Kasir"]
+        menu_kasir = ["👥  Data Pelanggan", "🛒  Kasir"]
         menu = st.radio(
             "Menu utama",
-            [
-                "🏠  Beranda",
-                "👥  Data Pelanggan",
-                "🧺  Kategori & Layanan",
-                "🛒  Kasir",
-            ],
+            menu_owner if u.get("role") == "owner" else menu_kasir,
             label_visibility="collapsed",
+            key="menu_utama",
         )
         st.markdown("---")
-        u = st.session_state.get("user", {})
+        label_peran = "Owner" if u.get("role") == "owner" else "Kasir"
         st.markdown(
             f"""
             <div class="sb-user">
               <div class="sb-user-ava">👤</div>
               <div>
-                <div class="sb-user-nama">{u.get('nama_lengkap', '')}</div>
-                <div class="sb-user-user">@{u.get('username', '')}</div>
+                <div class="sb-user-nama">{escape(u.get('nama_lengkap', ''))}</div>
+                <div class="sb-user-user">@{escape(u.get('username', ''))} · {label_peran}</div>
               </div>
             </div>
             """,
@@ -647,6 +711,7 @@ def bangun_sidebar() -> str:
         if st.button("🚪 Keluar", width="stretch"):
             st.session_state.pop("user", None)
             st.session_state.pop("keranjang", None)
+            st.session_state.pop("menu_utama", None)
             st.rerun()
         st.markdown("---")
         st.markdown(
@@ -1071,12 +1136,20 @@ def halaman_pelanggan() -> None:
         else:
             peta_pel_riwayat = {d["id_pelanggan"]: f'{d["nama_pelanggan"]} · {d["no_hp"]}' for d in semua}
             idx = st.selectbox("Pilih pelanggan", list(peta_pel_riwayat), format_func=lambda i: peta_pel_riwayat[i], key="riwayat_pelanggan_pilih")
-            riwayat = database.riwayat_pelanggan(idx)
+            riwayat = database.riwayat_pelanggan(
+                idx,
+                id_user=(
+                    st.session_state["user"]["id_user"]
+                    if st.session_state["user"]["role"] == "kasir"
+                    else None
+                ),
+            )
             if riwayat:
                 df = pd.DataFrame(riwayat).rename(
                     columns={
                         "kode_nota": "Kode Nota",
                         "tanggal": "Tanggal",
+                        "nama_kasir": "Kasir",
                         "total": "Total",
                         "total_berat": "Total Qty",
                         "jumlah_item": "Jumlah Item",
@@ -1089,7 +1162,7 @@ def halaman_pelanggan() -> None:
                 m3.metric("Total Belanja", rupiah(sum(r["total"] for r in riwayat)), border=True)
                 st.markdown("")
                 st.dataframe(
-                    df[["Kode Nota", "Tanggal", "Jumlah Item", "Total Qty", "Total"]],
+                    df[["Kode Nota", "Tanggal", "Kasir", "Jumlah Item", "Total Qty", "Total"]],
                     hide_index=True,
                     width="stretch",
                 )
@@ -1358,14 +1431,14 @@ def tampilkan_nota(kode_nota: str) -> None:
     total = sum(r["subtotal"] for r in rincian)
     total_berat = sum(r["berat"] for r in rincian)
     satuan_nota = sorted({r["satuan"] for r in rincian})
-    qty_nota = f"{total_berat:g} {satuan_nota[0]}" if len(satuan_nota) == 1 else f"{total_berat:g}"
+    qty_nota = f"{total_berat:g} {escape(satuan_nota[0])}" if len(satuan_nota) == 1 else f"{total_berat:g}"
 
     baris = "".join(
         f"""
         <tr>
-          <td style="padding:6px 10px 6px 0">{r['nama_kategori']}</td>
-          <td style="padding:6px 10px 6px 0">{r['nama_layanan']}</td>
-          <td style="padding:6px 10px 6px 0;text-align:right">{r['berat']:g} {r['satuan']}</td>
+          <td style="padding:6px 10px 6px 0">{escape(r['nama_kategori'])}</td>
+          <td style="padding:6px 10px 6px 0">{escape(r['nama_layanan'])}</td>
+          <td style="padding:6px 10px 6px 0;text-align:right">{r['berat']:g} {escape(r['satuan'])}</td>
           <td style="padding:6px 10px 6px 0;text-align:right">{rupiah(r['harga_satuan'])}</td>
           <td style="padding:6px 0;text-align:right;font-weight:700">{rupiah(r['subtotal'])}</td>
         </tr>"""
@@ -1377,11 +1450,12 @@ def tampilkan_nota(kode_nota: str) -> None:
         <div class="nota">
           <div class="nota-head">
             <div>
-              <div class="nota-kode">🧾 NOTA {info['kode_nota']}</div>
+              <div class="nota-kode">🧾 NOTA {escape(info['kode_nota'])}</div>
               <div class="nota-meta">
-                Tanggal &nbsp;: {info['tanggal']}<br>
-                Pelanggan : {info['nama_pelanggan']} ({info['no_hp']})<br>
-                Alamat &nbsp;&nbsp;&nbsp;: {info['alamat']}
+                Tanggal &nbsp;: {escape(info['tanggal'])}<br>
+                Pelanggan : {escape(info['nama_pelanggan'])} ({escape(info['no_hp'])})<br>
+                Kasir &nbsp;&nbsp;&nbsp;: {escape(info['nama_kasir'])} (@{escape(info['username_kasir'])})<br>
+                Alamat &nbsp;&nbsp;&nbsp;: {escape(info['alamat'])}
               </div>
             </div>
             <div style="text-align:right">
@@ -1413,6 +1487,7 @@ def tampilkan_nota(kode_nota: str) -> None:
 
 def halaman_kasir() -> None:
     tampilkan_flash()
+    user = st.session_state["user"]
     st.markdown(
         """
         <div class="hero">
@@ -1461,7 +1536,12 @@ def halaman_kasir() -> None:
         with p2:
             tanggal = st.date_input("Tanggal *", value=date.today())
         with p3:
-            kode_nota = st.text_input("Kode Nota *", value=database.kode_nota_berikutnya())
+            kode_nota = st.text_input(
+                "Kode Nota Otomatis *",
+                value=database.kode_nota_berikutnya(user["id_user"]),
+                disabled=True,
+                help="Nomor nota dibuat otomatis dan berlanjut sesuai akun kasir.",
+            )
 
         # -- Bagian 2: tambah cucian
         st.markdown(
@@ -1623,6 +1703,7 @@ def halaman_kasir() -> None:
                             kode_nota.strip().upper(),
                             tanggal.isoformat(),
                             id_pelanggan,
+                            user["id_user"],
                             [
                                 {"id_layanan": i["id_layanan"], "berat": i["berat"]}
                                 for i in st.session_state.keranjang
@@ -1650,12 +1731,44 @@ def halaman_kasir() -> None:
 
     # ------------------------------------------------------------ riwayat
     with tab_riwayat:
+        owner = user["role"] == "owner"
+        judul = "Riwayat Semua Nota" if owner else "Riwayat Nota Saya"
         st.markdown(
-            '<div class="section-title"><span class="bar"></span>Riwayat Semua Nota</div>',
+            f'<div class="section-title"><span class="bar"></span>{judul}</div>',
             unsafe_allow_html=True,
         )
-        cari = st.text_input("🔍 Cari nota (kode atau nama pelanggan)", key="cari_nota", placeholder="Ketik kode nota / nama ...")
-        nota = database.daftar_nota(cari)
+        st.caption(
+            "Owner dapat melihat dan memfilter transaksi seluruh kasir."
+            if owner
+            else "Anda hanya dapat melihat transaksi yang dibuat dengan akun ini."
+        )
+        c1, c2 = st.columns([3, 2])
+        with c1:
+            cari = st.text_input(
+                "🔍 Cari nota",
+                key="cari_nota",
+                placeholder="Kode nota, nama pelanggan, atau nama kasir",
+            )
+        id_pembuat = None
+        if owner:
+            semua_nota = database.daftar_nota()
+            peta_pembuat = {
+                n["id_user"]: f'{n["nama_kasir"]} (@{n["username_kasir"]})'
+                for n in semua_nota
+            }
+            with c2:
+                pilihan_pembuat = st.selectbox(
+                    "Filter kasir",
+                    [None, *peta_pembuat],
+                    format_func=lambda i: "Semua kasir" if i is None else peta_pembuat[i],
+                )
+            id_pembuat = pilihan_pembuat
+
+        nota = (
+            database.daftar_nota(cari, id_pembuat=id_pembuat)
+            if owner
+            else database.daftar_nota(cari, id_user=user["id_user"])
+        )
         if nota:
             df = pd.DataFrame(nota).rename(
                 columns={
@@ -1664,17 +1777,15 @@ def halaman_kasir() -> None:
                     "tanggal": "Tanggal",
                     "nama_pelanggan": "Pelanggan",
                     "no_hp": "No. HP",
+                    "nama_kasir": "Kasir",
                     "total": "Total",
                     "total_berat": "Total Qty",
                     "jumlah_item": "Item",
                 }
             )
             df["Total"] = df["Total"].apply(rupiah)
-            st.dataframe(
-                df[["ID", "Kode Nota", "Tanggal", "Pelanggan", "No. HP", "Item", "Total Qty", "Total"]],
-                hide_index=True,
-                width="stretch",
-            )
+            kolom = ["ID", "Kode Nota", "Tanggal", "Pelanggan", "No. HP", "Kasir", "Item", "Total Qty", "Total"]
+            st.dataframe(df[kolom], hide_index=True, width="stretch")
             pilihan = st.selectbox(
                 "Lihat rincian nota",
                 [n["kode_nota"] for n in nota],
@@ -1683,7 +1794,7 @@ def halaman_kasir() -> None:
             tampilkan_nota(pilihan)
             st.download_button(
                 "⬇️ Unduh riwayat transaksi (CSV)",
-                df.to_csv(index=False).encode("utf-8"),
+                df[kolom].to_csv(index=False).encode("utf-8"),
                 file_name="riwayat_transaksi.csv",
                 mime="text/csv",
             )
@@ -1705,6 +1816,7 @@ def _nota_teks(kode_nota: str) -> str:
         f"Kode Nota   : {info['kode_nota']}",
         f"Tanggal     : {info['tanggal']}",
         f"Pelanggan   : {info['nama_pelanggan']} ({info['no_hp']})",
+        f"Kasir       : {info['nama_kasir']} (@{info['username_kasir']})",
         f"Alamat      : {info['alamat']}",
         garis,
         f"{'Kategori':<12}{'Layanan':<22}{'Qty':>8}{'Subtotal':>14}",
@@ -1732,12 +1844,15 @@ def main() -> None:
         halaman_login()
         return
     menu = bangun_sidebar()
+    user = st.session_state["user"]
 
-    if menu.startswith("🏠"):
-        halaman_beranda()
-    elif menu.startswith("👥"):
+    if menu.startswith("👥"):
         halaman_pelanggan()
-    elif menu.startswith("🧺"):
+    elif menu.startswith("🛒"):
+        halaman_kasir()
+    elif user["role"] == "owner" and menu.startswith("🏠"):
+        halaman_beranda()
+    elif user["role"] == "owner" and menu.startswith("🧺"):
         halaman_kategori_layanan()
     else:
         halaman_kasir()
